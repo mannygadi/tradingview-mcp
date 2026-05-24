@@ -99,6 +99,47 @@ function saveWatchlist(wl) {
   fs.writeFileSync(WATCHLIST_FILE, JSON.stringify(wl, null, 2));
 }
 
+// Remove all auto-generated backend data for a symbol (call on watchlist remove or SA portfolio change).
+// Preserves manually created notes so the user doesn't lose their own work.
+function purgeSymbolData(sym) {
+  const symbol = sym.toUpperCase();
+  const notes  = loadNotes();
+  const kept   = notes.filter(n => !(n.tags?.includes('auto-earnings') && (n.ticker || '').toUpperCase() === symbol));
+  const removed = notes.length - kept.length;
+  if (removed > 0) saveNotes(kept);
+  return { notesRemoved: removed };
+}
+
+// Fetch earnings date for sym and upsert an auto-earnings note. Fire-and-forget — no response needed.
+async function fetchAndCreateEarningsNote(sym) {
+  const http = require('http');
+  const symbol = sym.toUpperCase();
+  try {
+    const data = await new Promise((resolve) => {
+      http.get(`http://127.0.0.1:8766/api/earnings?ticker=${encodeURIComponent(symbol)}`, (resp) => {
+        let raw = '';
+        resp.on('data', c => { raw += c; });
+        resp.on('end', () => { try { resolve(JSON.parse(raw)); } catch { resolve(null); } });
+      }).on('error', () => resolve(null));
+    });
+    if (!data?.earningsDate) return;
+    const notes = loadNotes();
+    // Skip if already up-to-date
+    if (notes.find(n => n.type === 'earnings' && (n.ticker||'').toUpperCase() === symbol && n.dueDate === data.earningsDate)) return;
+    // Remove stale auto-earnings note for this ticker if date changed
+    const cleaned = notes.filter(n => !(n.type === 'earnings' && (n.ticker||'').toUpperCase() === symbol && n.tags?.includes('auto-earnings')));
+    cleaned.push({
+      id: `earnings-${symbol}-${data.earningsDate}`,
+      title: `${symbol} Earnings`,
+      body: `Upcoming earnings report for ${symbol}. Review position before market open.`,
+      ticker: symbol, type: 'earnings', dueDate: data.earningsDate,
+      completed: false, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      tags: ['auto-earnings'], source: 'auto-sync',
+    });
+    saveNotes(cleaned);
+  } catch { /* best-effort */ }
+}
+
 function defaultAlerts() {
   return {
     enabled: true,
@@ -522,7 +563,7 @@ export function registerControlRoutes(app, validateToken) {
     res.json({ watchlist: loadWatchlist() });
   });
 
-  router.post('/watchlist', (req, res) => {
+  router.post('/watchlist', async (req, res) => {
     const { symbol, notes = '', alerts } = req.body;
     if (!symbol) return res.status(400).json({ error: 'symbol required' });
     const sym = symbol.toUpperCase().trim();
@@ -537,6 +578,10 @@ export function registerControlRoutes(app, validateToken) {
     };
     wl.push(item);
     saveWatchlist(wl);
+
+    // Fire-and-forget: fetch earnings for the new symbol and create a note immediately
+    fetchAndCreateEarningsNote(sym);
+
     res.json({ item });
   });
 
@@ -558,7 +603,8 @@ export function registerControlRoutes(app, validateToken) {
     if (idx < 0) return res.status(404).json({ error: 'Symbol not in watchlist' });
     wl.splice(idx, 1);
     saveWatchlist(wl);
-    res.json({ ok: true });
+    const purged = purgeSymbolData(sym);
+    res.json({ ok: true, ...purged });
   });
 
   // Proxy to ticker-api for live technical data (keeps auth on one port)
@@ -583,6 +629,21 @@ export function registerControlRoutes(app, validateToken) {
     res.json({ ok: true, message: 'Watchlist scan triggered' });
     const proc = spawn(py, [scr], { detached: true, stdio: 'ignore' });
     proc.unref();
+  });
+
+  // ── SA Portfolio hooks (called by sa-stocks-analysis-linux after each run) ──
+  // Purge all auto-generated data for a ticker removed from SAStocks
+  router.delete('/sa-portfolio/:symbol', (req, res) => {
+    const sym = req.params.symbol.toUpperCase();
+    const purged = purgeSymbolData(sym);
+    res.json({ ok: true, symbol: sym, ...purged });
+  });
+
+  // Fetch and upsert earnings note for a ticker newly added to SAStocks
+  router.post('/sa-portfolio/:symbol/sync-earnings', async (req, res) => {
+    const sym = req.params.symbol.toUpperCase();
+    await fetchAndCreateEarningsNote(sym);
+    res.json({ ok: true, symbol: sym });
   });
 
   // ── Ticker Search (proxy to ticker-api) ───────────────────────────────────
