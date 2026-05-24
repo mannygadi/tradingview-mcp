@@ -641,25 +641,35 @@ export function registerControlRoutes(app, validateToken) {
       }
     } catch { /* IBKR offline — skip */ }
 
-    const uniqueSymbols = [...new Set(symbols)];
-    const notes = loadNotes();
-    const synced = [], skipped = [], errors = [];
+    const uniqueSymbols = new Set(symbols.map(s => s.toUpperCase()));
+    let notes = loadNotes();
+    const synced = [], removed = [], skipped = [], errors = [];
 
+    // ── 1. Remove auto-earnings notes for symbols no longer in any portfolio/watchlist ──
+    const before = notes.length;
+    notes = notes.filter(n => {
+      if (n.type !== 'earnings' || !n.tags?.includes('auto-earnings')) return true;
+      const keep = uniqueSymbols.has((n.ticker || '').toUpperCase());
+      if (!keep) removed.push(n.ticker);
+      return keep;
+    });
+
+    // ── 2. Add/refresh earnings notes for every current symbol ──
     for (const sym of uniqueSymbols) {
       try {
         const data = await proxyGet(`http://127.0.0.1:8766/api/earnings?ticker=${encodeURIComponent(sym)}`);
         if (!data || !data.earningsDate) { skipped.push(sym); continue; }
 
-        const existingIdx = notes.findIndex(n =>
-          n.type === 'earnings' && n.ticker === sym && n.dueDate === data.earningsDate
+        // Already have an up-to-date note — nothing to do
+        const upToDate = notes.find(n =>
+          n.type === 'earnings' && (n.ticker || '').toUpperCase() === sym && n.dueDate === data.earningsDate
         );
-        if (existingIdx !== -1) { skipped.push(sym); continue; }
+        if (upToDate) { skipped.push(sym); continue; }
 
-        // Remove stale auto-earnings notes for this ticker
-        const staleIdx = notes.findIndex(n =>
-          n.type === 'earnings' && n.ticker === sym && n.tags?.includes('auto-earnings')
+        // Replace any stale auto-earnings note for this ticker (date changed)
+        notes = notes.filter(n =>
+          !(n.type === 'earnings' && (n.ticker || '').toUpperCase() === sym && n.tags?.includes('auto-earnings'))
         );
-        if (staleIdx !== -1) notes.splice(staleIdx, 1);
 
         notes.push({
           id: `earnings-${sym}-${data.earningsDate}`,
@@ -679,7 +689,7 @@ export function registerControlRoutes(app, validateToken) {
     }
 
     saveNotes(notes);
-    res.json({ ok: true, synced, skipped, errors });
+    res.json({ ok: true, synced, removed, skipped, errors });
   });
 
   // ── Strategy Results ───────────────────────────────────────────────────────
