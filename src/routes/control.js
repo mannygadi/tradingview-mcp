@@ -734,6 +734,19 @@ export function registerControlRoutes(app, validateToken) {
     }).on('error', () => res.json([]));
   });
 
+  // ── Trading Ideas — scan SA portfolio + watchlist for actionable signals ───
+  router.get('/trading-ideas', (req, res) => {
+    const http = require('http');
+    http.get('http://127.0.0.1:8766/api/trading-ideas', (resp) => {
+      let raw = '';
+      resp.on('data', c => { raw += c; });
+      resp.on('end', () => {
+        try { res.json(JSON.parse(raw)); }
+        catch { res.json({ ideas: [], count: 0, scanned: 0 }); }
+      });
+    }).on('error', () => res.json({ ideas: [], count: 0, scanned: 0 }));
+  });
+
   // ── Earnings Sync — auto-create notes for watchlist + portfolio ────────────
   router.post('/earnings/sync', async (req, res) => {
     const http = require('http');
