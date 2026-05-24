@@ -58,10 +58,11 @@ function listReports() {
   } catch { return []; }
 }
 
-const RULES_FILE     = path.join(AUTOTRADING, 'rules.json');
-const STRATEGY_FILE  = path.join(AUTOTRADING, 'strategy_results.json');
-const NOTES_FILE     = path.join(AUTOTRADING, 'notes.json');
-const WATCHLIST_FILE = path.join(AUTOTRADING, 'watchlist.json');
+const RULES_FILE       = path.join(AUTOTRADING, 'rules.json');
+const STRATEGY_FILE    = path.join(AUTOTRADING, 'strategy_results.json');
+const NOTES_FILE       = path.join(AUTOTRADING, 'notes.json');
+const WATCHLIST_FILE   = path.join(AUTOTRADING, 'watchlist.json');
+const SA_TICKERS_FILE  = path.join(AUTOTRADING, 'sa_portfolio_tickers.json');
 const NTFY_TOPIC     = 'autotrading-mgadiraju';
 
 let analysisState = { running: false, pid: null, startedAt: null };
@@ -81,6 +82,14 @@ function loadStrategyResults() {
 
 function saveStrategyResults(results) {
   fs.writeFileSync(STRATEGY_FILE, JSON.stringify(results, null, 2));
+}
+
+function loadSATickers() {
+  try { return JSON.parse(fs.readFileSync(SA_TICKERS_FILE, 'utf8')); } catch { return []; }
+}
+
+function saveSATickers(tickers) {
+  fs.writeFileSync(SA_TICKERS_FILE, JSON.stringify(tickers, null, 2));
 }
 
 function loadNotes() {
@@ -709,6 +718,9 @@ export function registerControlRoutes(app, validateToken) {
   router.delete('/sa-portfolio/:symbol', (req, res) => {
     const sym = req.params.symbol.toUpperCase();
     const purged = purgeSymbolData(sym);
+    // Remove from SA tickers cache so ideas no longer includes this stock
+    const tickers = loadSATickers().filter(t => t.toUpperCase() !== sym);
+    saveSATickers(tickers);
     res.json({ ok: true, symbol: sym, ...purged });
   });
 
@@ -716,6 +728,12 @@ export function registerControlRoutes(app, validateToken) {
   router.post('/sa-portfolio/:symbol/sync-earnings', async (req, res) => {
     const sym = req.params.symbol.toUpperCase();
     await fetchAndCreateEarningsNote(sym);
+    // Add to SA tickers cache so ideas immediately includes this stock
+    const tickers = loadSATickers();
+    if (!tickers.map(t => t.toUpperCase()).includes(sym)) {
+      tickers.push(sym);
+      saveSATickers(tickers);
+    }
     res.json({ ok: true, symbol: sym });
   });
 
