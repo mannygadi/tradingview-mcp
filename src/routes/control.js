@@ -456,6 +456,42 @@ export function registerControlRoutes(app, validateToken) {
     }
   });
 
+  // Add a raw crontab line (system-level, not tracked in ios-events.json)
+  router.post('/cron', (req, res) => {
+    const { cron, command } = req.body;
+    if (!cron || !command) return res.status(400).json({ error: 'cron and command required' });
+    try {
+      let current = '';
+      try { current = execSync('crontab -l', { encoding: 'utf8' }); } catch {}
+      const newLine = `${cron} ${command}`;
+      if (current.includes(newLine)) return res.json({ ok: true, message: 'Already exists' });
+      const updated = current.trimEnd() + '\n' + newLine + '\n';
+      const tmp = '/tmp/autotrading_crontab.tmp';
+      fs.writeFileSync(tmp, updated);
+      execSync(`crontab ${tmp}`);
+      fs.unlinkSync(tmp);
+      res.json({ ok: true });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // Delete a system crontab line by matching its content (not ios-event managed)
+  router.delete('/cron', (req, res) => {
+    const { cron, command } = req.body;
+    if (!cron || !command) return res.status(400).json({ error: 'cron and command required' });
+    try {
+      const current = execSync('crontab -l', { encoding: 'utf8' });
+      const match = `${cron} ${command}`;
+      const filtered = current.split('\n')
+        .filter(l => !l.trim().startsWith(match.trim().split(' ').slice(0, 6).join(' ')))
+        .join('\n');
+      const tmp = '/tmp/autotrading_crontab.tmp';
+      fs.writeFileSync(tmp, filtered);
+      execSync(`crontab ${tmp}`);
+      fs.unlinkSync(tmp);
+      res.json({ ok: true });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
   router.post('/events', (req, res) => {
     const { name, cron, command, enabled = true } = req.body;
     if (!name || !cron || !command) return res.status(400).json({ error: 'name, cron, command required' });
