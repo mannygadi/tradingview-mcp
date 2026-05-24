@@ -228,7 +228,6 @@ function saveEvents(events) {
 function rebuildCron(events) {
   try {
     const existing = sh('crontab -l 2>/dev/null || true');
-    // Keep lines not managed by AutoTrading iOS
     const kept = existing.split('\n')
       .filter(l => !l.includes('# autotrading-ios-event'))
       .join('\n').trim();
@@ -239,7 +238,10 @@ function rebuildCron(events) {
       .join('\n');
 
     const full = [kept, 'TZ=America/New_York', newLines].filter(Boolean).join('\n') + '\n';
-    execSync(`echo ${JSON.stringify(full)} | crontab -`, { encoding: 'utf8' });
+    const tmp = '/tmp/autotrading_crontab.tmp';
+    fs.writeFileSync(tmp, full);
+    execSync(`crontab ${tmp}`);
+    fs.unlinkSync(tmp);
   } catch (err) {
     console.error('cron rebuild failed:', err.message);
   }
@@ -417,6 +419,41 @@ export function registerControlRoutes(app, validateToken) {
   // ── Events ────────────────────────────────────────────────────────────────
   router.get('/events', (req, res) => {
     res.json({ events: loadEvents() });
+  });
+
+  // Read-only view of real crontab entries (excludes rule_* and housekeeping lines)
+  router.get('/cron', (req, res) => {
+    try {
+      const raw = execSync('crontab -l', { encoding: 'utf8' });
+      const events = [];
+      for (const line of raw.split('\n')) {
+        const t = line.trim();
+        if (!t || t.startsWith('#') || t.startsWith('TZ=')) continue;
+        if (t.includes('autotrading-rule:')) continue;
+        if (t.includes('autotrading-ios-event')) continue;
+        if (t.includes('clean_lean_logs.sh')) continue;
+
+        // Parse: cron-expr(5 fields) command [# comment]
+        const m = t.match(/^((?:\S+\s+){4}\S+)\s+(.+?)(?:\s+#\s*(.*))?$/);
+        if (!m) continue;
+        const [, cronExpr, rawCmd, comment] = m;
+        const cmd = rawCmd.trim();
+
+        let name = comment?.trim() || '';
+        if (!name) {
+          if (cmd.includes('market_open'))      name = 'Market Open Analysis';
+          else if (cmd.includes('market_close')) name = 'Market Close Analysis';
+          else if (cmd.includes('strategy_builder') || cmd.includes('sa_strategy')) name = 'Strategy Builder';
+          else name = cmd.split('/').pop().replace('.sh', '');
+        }
+
+        const id = `cron-${Buffer.from(t).toString('base64').slice(0, 12)}`;
+        events.push({ id, name, cron: cronExpr.trim(), command: cmd, enabled: true, source: 'system', readOnly: true, createdAt: '' });
+      }
+      res.json({ events });
+    } catch (e) {
+      res.status(500).json({ error: e.message, events: [] });
+    }
   });
 
   router.post('/events', (req, res) => {
