@@ -619,7 +619,18 @@ export function registerControlRoutes(app, validateToken) {
     const wl = loadWatchlist();
     const symbols = [...new Set(wl.map(w => w.symbol))];
 
-    // Try to pull IBKR portfolio symbols too (best-effort — IBKR may be offline)
+    // Pull SA portfolio tickers (best-effort — falls back to cached file if cookie is stale)
+    try {
+      const py  = path.join(HOME, 'venv-trading/bin/python');
+      const scr = path.join(AUTOTRADING, 'get_sa_tickers.py');
+      if (fs.existsSync(scr) && fs.existsSync(py)) {
+        const out = execSync(`${py} ${scr}`, { encoding: 'utf8', timeout: 25000 });
+        const tickers = JSON.parse(out.trim());
+        if (Array.isArray(tickers)) tickers.forEach(t => { if (t) symbols.push(t); });
+      }
+    } catch { /* SA unavailable — skip */ }
+
+    // Also try IBKR portfolio (best-effort — IBKR may be offline)
     try {
       const py  = path.join(HOME, 'venv-trading/bin/python');
       const scr = path.join(AUTOTRADING, 'ibkr_api/get_portfolio.py');
