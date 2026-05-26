@@ -49,7 +49,8 @@ function ibkrConnected() {
 
 function listReports() {
   try {
-    return fs.readdirSync(AUTOTRADING)
+    const dir = path.join(AUTOTRADING, 'reports');
+    return fs.readdirSync(dir)
       .filter(f => f.startsWith('sa-stocks-') && f.endsWith('.html'))
       .sort()
       .reverse()
@@ -379,7 +380,7 @@ export function registerControlRoutes(app, validateToken) {
       return res.status(409).json({ ok: false, error: 'Analysis already running', ...analysisState });
     }
     const event = req.body.event || 'manual';
-    const script = path.join(AUTOTRADING, 'run_sa_analysis.sh');
+    const script = path.join(AUTOTRADING, 'scripts/run_sa_analysis.sh');
     const proc = spawn('bash', [script, event], {
       detached: true,
       stdio: 'ignore',
@@ -411,13 +412,25 @@ export function registerControlRoutes(app, validateToken) {
     res.json({ reports: listReports() });
   });
 
+  router.get('/reports/:filename', (req, res) => {
+    const { filename } = req.params;
+    if (!filename.match(/^sa-stocks-\d{4}-\d{2}-\d{2}\.html$/)) {
+      return res.status(404).send('Not found');
+    }
+    const filePath = path.join(AUTOTRADING, 'reports', filename);
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).send('Report not found');
+    }
+    res.sendFile(filePath);
+  });
+
   router.delete('/reports/:filename', (req, res) => {
     const { filename } = req.params;
     // Only allow deleting sa-stocks-*.html files to prevent path traversal
     if (!filename.match(/^sa-stocks-\d{4}-\d{2}-\d{2}\.html$/)) {
       return res.status(400).json({ ok: false, error: 'Invalid filename' });
     }
-    const filePath = path.join(AUTOTRADING, filename);
+    const filePath = path.join(AUTOTRADING, 'reports', filename);
     if (!fs.existsSync(filePath)) {
       return res.status(404).json({ ok: false, error: 'Report not found' });
     }
@@ -943,6 +956,17 @@ export function registerControlRoutes(app, validateToken) {
     );
 
     res.json({ ok: true, ruleId: rule.id, claudeAnalysis: analysis });
+  });
+
+  // Public report serving — no auth, WebView-friendly (same filename validation as the API route)
+  app.get('/reports/:filename', (req, res) => {
+    const { filename } = req.params;
+    if (!filename.match(/^sa-stocks-\d{4}-\d{2}-\d{2}\.html$/)) {
+      return res.status(404).send('Not found');
+    }
+    const filePath = path.join(AUTOTRADING, 'reports', filename);
+    if (!fs.existsSync(filePath)) return res.status(404).send('Report not found');
+    res.sendFile(filePath);
   });
 
   // Mount with auth (webhooks endpoint is also protected by API key)
