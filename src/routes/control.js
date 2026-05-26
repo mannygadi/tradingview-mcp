@@ -59,11 +59,13 @@ function listReports() {
   } catch { return []; }
 }
 
-const RULES_FILE       = path.join(AUTOTRADING, 'rules.json');
-const STRATEGY_FILE    = path.join(AUTOTRADING, 'strategy_results.json');
-const NOTES_FILE       = path.join(AUTOTRADING, 'notes.json');
-const WATCHLIST_FILE   = path.join(AUTOTRADING, 'watchlist.json');
-const SA_TICKERS_FILE  = path.join(AUTOTRADING, 'sa_portfolio_tickers.json');
+const DATA_DIR         = path.join(AUTOTRADING, 'data');
+const RULES_FILE       = path.join(DATA_DIR, 'rules.json');
+const STRATEGY_FILE    = path.join(DATA_DIR, 'strategy_results.json');
+const NOTES_FILE       = path.join(DATA_DIR, 'notes.json');
+const WATCHLIST_FILE   = path.join(DATA_DIR, 'watchlist.json');
+const SA_TICKERS_FILE  = path.join(DATA_DIR, 'sa_portfolio_tickers.json');
+const SETTINGS_FILE    = path.join(DATA_DIR, 'settings.json');
 const NTFY_TOPIC     = 'autotrading-mgadiraju';
 
 let analysisState = { running: false, pid: null, startedAt: null };
@@ -107,6 +109,14 @@ function loadWatchlist() {
 
 function saveWatchlist(wl) {
   fs.writeFileSync(WATCHLIST_FILE, JSON.stringify(wl, null, 2));
+}
+
+function loadSettings() {
+  try { return JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8')); } catch { return {}; }
+}
+
+function saveSettings(s) {
+  fs.writeFileSync(SETTINGS_FILE, JSON.stringify(s, null, 2));
 }
 
 // Remove all auto-generated backend data for a symbol (call on watchlist remove or SA portfolio change).
@@ -208,7 +218,7 @@ function rebuildRuleCron(rules) {
   try {
     const existing = sh('crontab -l 2>/dev/null || true');
     const py = path.join(HOME, 'venv/bin/python3');
-    const evaluator = path.join(AUTOTRADING, 'rule_evaluator.py');
+    const evaluator = path.join(AUTOTRADING, 'backend', 'rule_evaluator.py');
     const logFile = path.join(AUTOTRADING, 'logs/rules.log');
     const kept = existing.split('\n')
       .filter(l => !l.includes('# autotrading-rule') && !l.includes('# autotrading-ios-event'))
@@ -587,11 +597,25 @@ export function registerControlRoutes(app, validateToken) {
     if (!rules.find(r => r.id === req.params.id))
       return res.status(404).json({ error: 'Rule not found' });
     const py = path.join(HOME, 'venv/bin/python3');
-    const evaluator = path.join(AUTOTRADING, 'rule_evaluator.py');
+    const evaluator = path.join(AUTOTRADING, 'backend', 'rule_evaluator.py');
     res.json({ ok: true, message: 'Rule evaluation triggered' });
     const proc = spawn(py, [evaluator, req.params.id, '--force'],
                        { detached: true, stdio: 'ignore' });
     proc.unref();
+  });
+
+  // ── Settings ──────────────────────────────────────────────────────────────
+
+  router.get('/settings', (req, res) => {
+    const s = loadSettings();
+    res.json({ trading_enabled: s.trading_enabled === true });
+  });
+
+  router.patch('/settings', (req, res) => {
+    const s = loadSettings();
+    if ('trading_enabled' in req.body) s.trading_enabled = Boolean(req.body.trading_enabled);
+    saveSettings(s);
+    res.json({ ok: true, trading_enabled: s.trading_enabled === true });
   });
 
   // ── Notes ─────────────────────────────────────────────────────────────────
